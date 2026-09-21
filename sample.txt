@@ -1,0 +1,129 @@
+import os
+import sys
+from dotenv import load_dotenv
+from google import genai
+from google.genai.errors import APIError
+import pypdf
+
+# Load API key from .env file
+load_dotenv()
+api_key = os.getenv("GEMINI_API_KEY")
+
+if not api_key:
+    print("Error: GEMINI_API_KEY not found. Check your .env file.")
+    sys.exit(1)
+
+client = genai.Client(api_key=api_key)
+
+
+def extract_text_from_file(file_path: str) -> str:
+    """Reads .txt or .pdf files with defensive input checks."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File '{file_path}' does not exist.")
+
+    ext = os.path.splitext(file_path)[1].lower()
+    extracted_text = ""
+
+    if ext == ".txt":
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            extracted_text = f.read()
+
+    elif ext == ".pdf":
+        reader = pypdf.PdfReader(file_path)
+        pages_text = [page.extract_text() or "" for page in reader.pages]
+        extracted_text = "\n".join(pages_text)
+
+    else:
+        raise ValueError(f"Unsupported file format '{ext}'. Only .txt and .pdf are supported.")
+
+    cleaned_text = extracted_text.strip()
+    if not cleaned_text:
+        raise ValueError("The selected document is empty or contains no readable text.")
+
+    return cleaned_text
+
+
+def query_llm(prompt: str) -> str:
+    """Sends a structured prompt to the Gemini API with defensive error handling."""
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        return response.text
+    except APIError as e:
+        return f"[API Error]: Failed to get response from Gemini ({e.message})"
+    except Exception as e:
+        return f"[Network/System Error]: {str(e)}"
+
+
+def summarize_document(doc_text: str) -> str:
+    """Generates an executive summary of the document."""
+    prompt = f"""You are an analytical assistant. Provide a clear, structured summary
+of the following text using bullet points and an executive summary paragraph:
+
+--- DOCUMENT START ---
+{doc_text}
+--- DOCUMENT END ---
+"""
+    return query_llm(prompt)
+
+
+def answer_query(doc_text: str, question: str) -> str:
+    """Answers user queries grounded strictly in the document text."""
+    prompt = f"""You are a helpful assistant. Answer the user's question using ONLY the facts
+found in the document text below. If the answer is not present, state that clearly.
+
+Document Context:
+{doc_text}
+
+User Question: {question}
+"""
+    return query_llm(prompt)
+
+
+def main():
+    print("=" * 60)
+    print(" AI Text Summarization & Q&A Assistant (CLI)")
+    print("=" * 60)
+
+    # Input validation loop for document path
+    while True:
+        file_path = input("\nEnter document path (.txt or .pdf): ").strip()
+        if file_path.lower() in ["exit", "quit"]:
+            print("Exiting tool. Goodbye!")
+            return
+
+        try:
+            document_text = extract_text_from_file(file_path)
+            print(f" Successfully loaded document ({len(document_text)} characters).")
+            break
+        except (FileNotFoundError, ValueError) as err:
+            print(f" [Input Error]: {err}")
+            print("Please try again or type 'exit' to quit.")
+
+    # Automated Summary
+    print("\n--- Generating Document Summary ---")
+    summary = summarize_document(document_text)
+    print(summary)
+
+    # Interactive Q&A Mode
+    print("\n" + "=" * 60)
+    print(" Interactive Q&A Mode (Type 'exit' to quit)")
+    print("=" * 60)
+
+    while True:
+        user_question = input("\nAsk a question about this document: ").strip()
+        if not user_question:
+            continue
+        if user_question.lower() in ["exit", "quit"]:
+            print("Exiting Q&A session. Goodbye!")
+            break
+
+        print("\nThinking...")
+        answer = answer_query(document_text, user_question)
+        print(f"\nAssistant:\n{answer}")
+
+
+if __name__ == "__main__":
+    main()
